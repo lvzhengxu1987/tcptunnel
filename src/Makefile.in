@@ -4,7 +4,7 @@ CC = gcc
 LD = gcc
 CFLAGS = -Wall -I./
 LDFLAGS = @LDFLAGS@
-OBJS = tcptunnel.o
+OBJS = tcptunnel.o protocol_obscure.o
 
 BINDIR = @PREFIX@
 INSTALL = install

@@ -14,6 +14,7 @@
 #define STAY_ALIVE_OPTION     'i'
 #define HELP_OPTION           'j'
 #define VERSION_OPTION        'k'
+#define HTTP_OB_OPTION        'l'
 
 #define PATH_SEPARATOR '/'
 
@@ -46,6 +47,7 @@ struct struct_settings {
 	unsigned int client_address : 1;
 	unsigned int buffer_size    : 1;
 	unsigned int fork           : 1;
+	unsigned int http_obscure   : 1;
 	unsigned int log            : 1;
 	unsigned int stay_alive     : 1;
 };

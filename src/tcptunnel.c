@@ -41,7 +41,7 @@
 
 struct struct_rc rc;
 struct struct_options options;
-struct struct_settings settings = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+struct struct_settings settings = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 static struct option long_options[] = {
 	{ "local-port",    required_argument, NULL, LOCAL_PORT_OPTION },
@@ -53,12 +53,18 @@ static struct option long_options[] = {
 #ifndef __MINGW32__
 	{ "fork",          no_argument,       NULL, FORK_OPTION },
 #endif
+    // 添加混淆配置代码
+	{ "http-obscure",  no_argument,       NULL, HTTP_OB_OPTION },
 	{ "log",           no_argument,       NULL, LOG_OPTION },
 	{ "stay-alive",    no_argument,       NULL, STAY_ALIVE_OPTION },
 	{ "help",          no_argument,       NULL, HELP_OPTION },
 	{ "version",       no_argument,       NULL, VERSION_OPTION },
 	{ 0, 0, 0, 0 }
 };
+
+
+extern int buildHttpRequest(char *buf, int buflen);
+extern int buildHttpResponse(char *buf, int buflen);
 
 int main(int argc, char *argv[])
 {
@@ -170,7 +176,11 @@ void set_options(int argc, char *argv[])
 				settings.stay_alive = 1;
 				break;
 			}
-
+			case HTTP_OB_OPTION:
+			{
+				settings.http_obscure = 1;
+				break;
+			}
 			case HELP_OPTION:
 			{
 				print_usage();
@@ -294,216 +304,246 @@ int wait_for_clients(void)
 		printf("> %s tcptunnel: request from %s\n", get_current_timestamp(), inet_ntoa(rc.client_addr.sin_addr));
 	}
 
-	return 0;
+    // 接受 client的混淆数据，通过参数判断
+    if (settings.http_obscure)
+    {
+        int ret = 0,recv_request=0,send_response=0;
+        char buf[1024]={0};
+        printf("> tcptunnel: enter http obscure mode\n");
+        while(1){                      
+            if (recv_request == 0 && send_response == 0 ){
+                memset(buf, 0x00, sizeof(buf));
+                recv(rc.client_socket,buf, 1024, 0);
+                printf( "接受客户端 %s",buf);
+                if (strncmp(buf, "GET /", 5 ) != 0 ){
+                    printf("接收数据格式不正确");
+                    return 1;
+                }
+                memset(buf, 0x00, sizeof(buf));
+                int len = buildHttpResponse(buf, 1024);
+                printf("server 组织http数据 send httpresponse=%d\nbuf=%s\n",len, buf);
+                ret = send(rc.client_socket, buf,strlen(buf),0 );
+                if (ret == -1){
+                    printf("server 发送数据出错,errno is %d,msg is %s",errno, strerror(errno));
+                    return 1;
+                }
+                recv_request = send_response = 1;
+            }else if ( recv_request == 1 && send_response == 1 ){
+                return 0;
+            }
+        }
+    }
+    return 0;
 }
 
 void handle_client(void)
 {
 #ifdef __MINGW32__
-	handle_tunnel();
+    handle_tunnel();
 #else
-	if (settings.fork)
-	{
-		if (fork() == 0)
-		{
-			close(rc.server_socket);
-			handle_tunnel();
-			exit(0);
-		}
-		close(rc.client_socket);
-	}
-	else
-	{
-		handle_tunnel();
-	}
+    if (settings.fork)
+    {
+        if (fork() == 0)
+        {
+            close(rc.server_socket);
+            handle_tunnel();
+            exit(0);
+        }
+        close(rc.client_socket);
+    }
+    else
+    {
+        handle_tunnel();
+    }
 #endif
 }
 
 void handle_tunnel(void)
 {
-	if (build_tunnel() == 0)
-	{
-		use_tunnel();
-	}
+    if (build_tunnel() == 0)
+    {
+        use_tunnel();
+    }
 
 }
 
 int build_tunnel(void)
 {
-	rc.remote_host = gethostbyname(options.remote_host);
-	if (rc.remote_host == NULL)
-	{
-		perror("build_tunnel: gethostbyname()");
-		return 1;
-	}
+    rc.remote_host = gethostbyname(options.remote_host);
+    if (rc.remote_host == NULL)
+    {
+        perror("build_tunnel: gethostbyname()");
+        return 1;
+    }
 
-	memset(&rc.remote_addr, 0, sizeof(rc.remote_addr));
+    memset(&rc.remote_addr, 0, sizeof(rc.remote_addr));
 
-	rc.remote_addr.sin_family = AF_INET;
-	rc.remote_addr.sin_port = htons(atoi(options.remote_port));
+    rc.remote_addr.sin_family = AF_INET;
+    rc.remote_addr.sin_port = htons(atoi(options.remote_port));
 
-	memcpy(&rc.remote_addr.sin_addr.s_addr, rc.remote_host->h_addr, rc.remote_host->h_length);
+    memcpy(&rc.remote_addr.sin_addr.s_addr, rc.remote_host->h_addr, rc.remote_host->h_length);
 
-	rc.remote_socket = socket(AF_INET, SOCK_STREAM, 0);
-	if (rc.remote_socket < 0)
-	{
-		perror("build_tunnel: socket()");
-		return 1;
-	}
+    rc.remote_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (rc.remote_socket < 0)
+    {
+        perror("build_tunnel: socket()");
+        return 1;
+    }
 
-	if (connect(rc.remote_socket, (struct sockaddr *) &rc.remote_addr, sizeof(rc.remote_addr)) < 0)
-	{
-		perror("build_tunnel: connect()");
-		return 1;
-	}
+    if (connect(rc.remote_socket, (struct sockaddr *) &rc.remote_addr, sizeof(rc.remote_addr)) < 0)
+    {
+        perror("build_tunnel: connect()");
+        return 1;
+    }
 
-	return 0;
+    return 0;
 }
 
 int use_tunnel(void)
 {
-	fd_set io;
-	char buffer[options.buffer_size];
+    fd_set io;
+    char buffer[options.buffer_size];
 
-	for (;;)
-	{
-		FD_ZERO(&io);
-		FD_SET(rc.client_socket, &io);
-		FD_SET(rc.remote_socket, &io);
+    for (;;)
+    {
+        FD_ZERO(&io);
+        FD_SET(rc.client_socket, &io);
+        FD_SET(rc.remote_socket, &io);
 
-		memset(buffer, 0, sizeof(buffer));
+        memset(buffer, 0, sizeof(buffer));
 
-		if (select(fd(), &io, NULL, NULL, NULL) < 0)
-		{
-			perror("use_tunnel: select()");
-			break;
-		}
+        if (select(fd(), &io, NULL, NULL, NULL) < 0)
+        {
+            perror("use_tunnel: select()");
+            break;
+        }
 
-		if (FD_ISSET(rc.client_socket, &io))
-		{
-			int count = recv(rc.client_socket, buffer, sizeof(buffer), 0);
-			if (count < 0)
-			{
-				perror("use_tunnel: recv(rc.client_socket)");
-				close(rc.client_socket);
-				close(rc.remote_socket);
-				return 1;
-			}
+        if (FD_ISSET(rc.client_socket, &io))
+        {
+            int count = recv(rc.client_socket, buffer, sizeof(buffer), 0);
+            if (count < 0)
+            {
+                perror("use_tunnel: recv(rc.client_socket)");
+                close(rc.client_socket);
+                close(rc.remote_socket);
+                return 1;
+            }
 
-			if (count == 0)
-			{
-				close(rc.client_socket);
-				close(rc.remote_socket);
-				return 0;
-			}
+            if (count == 0)
+            {
+                close(rc.client_socket);
+                close(rc.remote_socket);
+                return 0;
+            }
 
-			send(rc.remote_socket, buffer, count, 0);
+            send(rc.remote_socket, buffer, count, 0);
 
-			if (settings.log)
-			{
-				printf("> %s > ", get_current_timestamp());
-				fwrite(buffer, sizeof(char), count, stdout);
-				fflush(stdout);
-			}
-		}
+            if (settings.log)
+            {
+                printf("> %s > ", get_current_timestamp());
+                fwrite(buffer, sizeof(char), count, stdout);
+                fflush(stdout);
+            }
+        }
 
-		if (FD_ISSET(rc.remote_socket, &io))
-		{
-			int count = recv(rc.remote_socket, buffer, sizeof(buffer), 0);
-			if (count < 0)
-			{
-				perror("use_tunnel: recv(rc.remote_socket)");
-				close(rc.client_socket);
-				close(rc.remote_socket);
-				return 1;
-			}
+        if (FD_ISSET(rc.remote_socket, &io))
+        {
+            int count = recv(rc.remote_socket, buffer, sizeof(buffer), 0);
+            if (count < 0)
+            {
+                perror("use_tunnel: recv(rc.remote_socket)");
+                close(rc.client_socket);
+                close(rc.remote_socket);
+                return 1;
+            }
 
-			if (count == 0)
-			{
-				close(rc.client_socket);
-				close(rc.remote_socket);
-				return 0;
-			}
+            if (count == 0)
+            {
+                close(rc.client_socket);
+                close(rc.remote_socket);
+                return 0;
+            }
 
-			send(rc.client_socket, buffer, count, 0);
+            send(rc.client_socket, buffer, count, 0);
 
-			if (settings.log)
-			{
-				fwrite(buffer, sizeof(char), count, stdout);
-				fflush(stdout);
-			}
-		}
-	}
+            if (settings.log)
+            {
+                fwrite(buffer, sizeof(char), count, stdout);
+                fflush(stdout);
+            }
+        }
+    }
 
-	return 0;
+    return 0;
 }
 
 int fd(void)
 {
-	unsigned int fd = rc.client_socket;
-	if (fd < rc.remote_socket)
-	{
-		fd = rc.remote_socket;
-	}
-	return fd + 1;
+    unsigned int fd = rc.client_socket;
+    if (fd < rc.remote_socket)
+    {
+        fd = rc.remote_socket;
+    }
+    return fd + 1;
 }
 
 char *get_current_timestamp(void)
 {
-	static char date_str[20];
-	time_t date;
+    static char date_str[20];
+    time_t date;
 
-	time(&date);
-	strftime(date_str, sizeof(date_str), "%Y-%m-%d %H:%M:%S", localtime(&date));
-	return date_str;
+    time(&date);
+    strftime(date_str, sizeof(date_str), "%Y-%m-%d %H:%M:%S", localtime(&date));
+    return date_str;
 }
 
 void print_usage(void)
 {
-	fprintf(stderr, "Usage: %s [options]\n\n", name);
+    fprintf(stderr, "Usage: %s [options]\n\n", name);
 }
 
 void print_helpinfo(void)
 {
-	fprintf(stderr, "Try `%s --help' for more options\n", name);
+    fprintf(stderr, "Try `%s --help' for more options\n", name);
 }
 
 void print_help(void)
 {
-	fprintf(stderr, "\
-Options:\n\
-  --version\n\
-  --help\n\n\
-  --local-port=PORT    local port\n\
-  --remote-port=PORT   remote port\n\
-  --remote-host=HOST   remote host\n\
-  --bind-address=IP    bind address\n\
-  --client-address=IP  only accept connections from this address\n\
-  --buffer-size=BYTES  buffer size\n"
+    fprintf(stderr, "\
+            Options:\n\
+            --version\n\
+            --help\n\n\
+            --local-port=PORT    local port\n\
+            --remote-port=PORT   remote port\n\
+            --remote-host=HOST   remote host\n\
+            --bind-address=IP    bind address\n\
+            --client-address=IP  only accept connections from this address\n\
+            --buffer-size=BYTES  buffer size\n\
+            --http-obscure\n"
 #ifndef __MINGW32__
-"  --fork               fork-based concurrency\n"
+            "   --fork               fork-based concurrency\n"
 #endif
-"  --log\n\
-  --stay-alive\n\n\
-\n");
+            "   --log\n\
+            --stay-alive\n\n\
+            \n");
 }
 
 void print_version(void)
 {
-	fprintf(stderr, "\
-tcptunnel v" VERSION " Copyright (C) 2000-2013 Clemens Fuchslocher\n\n\
-This program is distributed in the hope that it will be useful,\n\
-but WITHOUT ANY WARRANTY; without even the implied warranty of\n\
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n\
-GNU General Public License for more details.\n\n\
-Written by Clemens Fuchslocher <clemens@vakuumverpackt.de>\n\
-");
+    fprintf(stderr, "\
+            tcptunnel v" VERSION " Copyright (C) 2000-2013 Clemens Fuchslocher\n\n\
+            This program is distributed in the hope that it will be useful,\n\
+            but WITHOUT ANY WARRANTY; without even the implied warranty of\n\
+            MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n\
+            GNU General Public License for more details.\n\n\
+            Written by Clemens Fuchslocher <clemens@vakuumverpackt.de>\n\
+            ");
 }
 
 void print_missing(const char *message)
 {
-	print_usage();
-	fprintf(stderr, "%s: %s\n", name, message);
-	print_helpinfo();
+    print_usage();
+    fprintf(stderr, "%s: %s\n", name, message);
+    print_helpinfo();
 }
 
